@@ -18,6 +18,28 @@ services:
       timeout: 5s
       retries: 5
 
+  retention:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGDATABASE: jobmarket
+      PGUSER: app
+      PGPASSWORD: secret
+      PGCONNECT_TIMEOUT: 5
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          if removed=$$(psql -XAt -v ON_ERROR_STOP=1 -c 'SELECT prune_expired_vacancies()'); then
+            if [ "$$removed" != 0 ]; then echo "Expired vacancies removed: $$removed"; fi
+          fi
+          sleep 60
+        done
+
   redis:
     image: redis:7-alpine
     container_name: jobmarket_redis
