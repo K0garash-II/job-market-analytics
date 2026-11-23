@@ -1,51 +1,33 @@
 package main
 
-//точка входа API: запускает Gin сервер
 import (
 	"context"
-	"log"
-	"os"
-
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/malayegor9-dotcom/job-market-analytics/pkg/db"
 	"github.com/malayegor9-dotcom/job-market-analytics/services/api/internal/handler"
+	"github.com/malayegor9-dotcom/job-market-analytics/services/api/internal/postgres"
+	"log"
+	"os"
 )
 
-func main() {
-	if err := godotenv.Load(".env"); err != nil {
-		log.Println("no .env file, reading from environment")
-	}
-
-	ctx := context.Background()
-
-	pgPool, err := db.NewPostgresPool(ctx, os.Getenv("DATABASE_URL"))
+func run() error {
+	pool, err := db.NewPostgresPool(context.Background(), os.Getenv("DATABASE_URL"))
 	if err != nil {
-		log.Fatalf("postgres: %v", err)
+		return err
 	}
-	defer pgPool.Close()
-	log.Println("✓ PostgreSQL connected")
-
-	redisClient, err := db.NewRedisClient(ctx, os.Getenv("REDIS_URL"))
-	if err != nil {
-		log.Fatalf("redis: %v", err)
-	}
-	defer redisClient.Close()
-	log.Println("✓ Redis connected")
-
-	// Создаём handler и регистрируем маршруты
-	h := handler.New(pgPool, redisClient)
-
+	defer pool.Close()
 	r := gin.Default()
-	h.RegisterRoutes(r)
-
+	handler.New(postgres.Reader{Pool: pool}).RegisterRoutes(r)
 	port := os.Getenv("API_PORT")
 	if port == "" {
 		port = "8080"
 	}
-
-	log.Printf("API server starting on :%s", port)
-	if err := r.Run(":" + port); err != nil {
-		log.Fatalf("server error: %v", err)
+	return r.Run(":" + port)
+}
+func main() {
+	_ = godotenv.Load()
+	if err := run(); err != nil {
+		log.Fatal(err)
 	}
 }

@@ -1,67 +1,20 @@
 package handler
 
-//эндпоинты аналитики: топ навыков, статистика зарплат
-import (
-	"net/http"
+import "github.com/gin-gonic/gin"
 
-	"github.com/gin-gonic/gin"
-)
-
-type SkillStat struct {
-	Name     string `json:"name"`
-	Category string `json:"category"`
-	Count    int    `json:"count"`
-}
-
-// TopSkills GET /api/v1/analytics/skills
 func (h *Handler) TopSkills(c *gin.Context) {
-	rows, err := h.db.Query(c, `
-		SELECT s.name, s.category, COUNT(*) as count
-		FROM vacancy_skills vs
-		JOIN skills s ON s.id = vs.skill_id
-		GROUP BY s.name, s.category
-		ORDER BY count DESC
-		LIMIT 20
-	`)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	defer rows.Close()
-
-	skills := []SkillStat{}
-	for rows.Next() {
-		var s SkillStat
-		if err := rows.Scan(&s.Name, &s.Category, &s.Count); err != nil {
-			continue
-		}
-		skills = append(skills, s)
-	}
-
-	c.JSON(http.StatusOK, gin.H{"data": skills})
+	data, err := h.market.Skills(c.Request.Context())
+	respond(c, gin.H{"data": data}, err)
 }
-
-// SalaryStats GET /api/v1/analytics/salary
+func (h *Handler) Companies(c *gin.Context) {
+	data, err := h.market.Companies(c.Request.Context())
+	respond(c, gin.H{"data": data}, err)
+}
+func (h *Handler) Overview(c *gin.Context) {
+	data, err := h.market.Overview(c.Request.Context())
+	respond(c, data, err)
+}
 func (h *Handler) SalaryStats(c *gin.Context) {
-	var stats struct {
-		Total      int     `json:"total_vacancies"`
-		WithSalary int     `json:"with_salary"`
-		AvgMin     float64 `json:"avg_salary_min"`
-		AvgMax     float64 `json:"avg_salary_max"`
-	}
-
-	err := h.db.QueryRow(c, `
-		SELECT
-			COUNT(*),
-			COUNT(*) FILTER (WHERE salary_min IS NOT NULL),
-			COALESCE(AVG(salary_min) FILTER (WHERE salary_min IS NOT NULL), 0),
-			COALESCE(AVG(salary_max) FILTER (WHERE salary_max IS NOT NULL), 0)
-		FROM vacancies
-	`).Scan(&stats.Total, &stats.WithSalary, &stats.AvgMin, &stats.AvgMax)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, stats)
+	data, err := h.market.Salary(c.Request.Context())
+	respond(c, data, err)
 }
