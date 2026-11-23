@@ -9,6 +9,9 @@ function Publications({ days }) {
   const rows = days.slice(-range);
   const max = Math.max(1, ...rows.map((row) => row.count));
   const total = rows.reduce((sum, day) => sum + day.count, 0);
+  const dateRange = new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric", month: "short", year: "numeric",
+  }).formatRange(new Date(rows[0].name + "T12:00:00"), new Date(rows.at(-1).name + "T12:00:00"));
   return (
     <section className="paper">
       <div className="section-head">
@@ -30,7 +33,7 @@ function Publications({ days }) {
       </div>
       <div className="plot-stat">
         <strong>{number(active?.count ?? total)}</strong>
-        <span>{active ? dayLabel(active.name) : "за " + range + " дней"}</span>
+        <span>{active ? dayLabel(active.name) : dateRange}</span>
       </div>
       <div
         className="plot"
@@ -121,7 +124,7 @@ function WorkFormat({ remote, total }) {
   );
 }
 export default function Overview() {
-  const overview = useMarket("analytics/overview");
+  const overview = useMarket("analytics/overview?period=latest");
   const latest = useMarket("vacancies?limit=5");
   return (
     <Resource request={overview}>

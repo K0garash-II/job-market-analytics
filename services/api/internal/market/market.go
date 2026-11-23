@@ -72,6 +72,6 @@ type Reader interface {
 	Search(context.Context, string) ([]SearchResult, error)
 	Skills(context.Context) ([]Skill, error)
 	Companies(context.Context) ([]Count, error)
-	Overview(context.Context) (Overview, error)
+	Overview(ctx context.Context, latestPublication bool) (Overview, error)
 	Salary(context.Context) (Salary, error)
 }

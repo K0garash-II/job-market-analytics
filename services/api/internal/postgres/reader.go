@@ -68,7 +68,7 @@ func (r Reader) Salary(ctx context.Context) (market.Salary, error) {
 	err := r.Pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE salary_min IS NOT NULL OR salary_max IS NOT NULL),coalesce(avg(salary_min),0),coalesce(avg(salary_max),0) FROM vacancies`).Scan(&s.Total, &s.WithSalary, &s.AvgMin, &s.AvgMax)
 	return s, err
 }
-func (r Reader) Overview(ctx context.Context) (market.Overview, error) {
+func (r Reader) Overview(ctx context.Context, latestPublication bool) (market.Overview, error) {
 	var o market.Overview
 	err := pgx.BeginTxFunc(ctx, r.Pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE remote),count(DISTINCT company_id),count(*) FILTER(WHERE salary_min IS NOT NULL OR salary_max IS NOT NULL) FROM vacancies`).Scan(&o.Total, &o.Remote, &o.Companies, &o.WithSalary)
@@ -79,8 +79,15 @@ func (r Reader) Overview(ctx context.Context) (market.Overview, error) {
 		if err != nil {
 			return err
 		}
-		o.Days, err = many[market.Count](ctx, tx, `WITH days AS (SELECT current_date-i AS day FROM generate_series(0,29) i)
- SELECT to_char(d.day,'YYYY-MM-DD'),count(v.id) FROM days d LEFT JOIN vacancies v ON v.published_at >= d.day AND v.published_at < d.day+1 GROUP BY d.day ORDER BY d.day`)
+		o.Days, err = many[market.Count](ctx, tx, `
+			WITH anchor AS (
+				SELECT CASE WHEN $1::boolean THEN COALESCE(
+					(SELECT max(published_at)::date FROM vacancies WHERE published_at < current_date+1), current_date
+				) ELSE current_date END AS last_day
+			), days AS (SELECT last_day-i AS day FROM anchor, generate_series(0,29) i)
+			SELECT to_char(d.day,'YYYY-MM-DD'), count(v.id)
+			FROM days d LEFT JOIN vacancies v ON v.published_at >= d.day AND v.published_at < d.day+1
+			GROUP BY d.day ORDER BY d.day`, latestPublication)
 		return err
 	})
 	return o, err
