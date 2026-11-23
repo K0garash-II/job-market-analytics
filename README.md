@@ -1,144 +1,75 @@
-# 📊 Job Market Analytics
+# Job Market Analytics
 
-Платформа для сбора и анализа вакансий с различных источников.  
-Go backend + Python визуализация на Streamlit.
+Аналитика IT-вакансий из Remote OK и Хабр Карьеры. React-интерфейс показывает динамику публикаций за 7 и 30 дней, распределение по источникам и формату работы, востребованные навыки и рейтинг работодателей. В каталоге доступны поиск по названию или компании, фильтры и переход к исходной публикации.
 
-![Go](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat&logo=go)
-![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat&logo=python)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=flat&logo=postgresql)
-![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat&logo=docker)
+## Архитектура
 
----
-
-## ✨ Возможности
-
-- **Сбор вакансий** с RemoteOK и Habr Career
-- **Дедупликация** через Redis — не сохраняем одно и то же дважды
-- **Асинхронная обработка** через очередь NATS
-- **Извлечение навыков** из текста вакансий по словарю
-- **REST API** для доступа к данным
-- **Дашборд** с графиками, картой навыков и фильтрами
-
----
-
-## 🚀 Быстрый старт
-
-### Требования
-
-- Go 1.21+
-- Python 3.12+
-- Docker Desktop
-
-### 1. Клонирование репозитория
-
-```bash
-git clone https://github.com/malayegor9-dotcom/job-market-analytics
-cd job-market-analytics
+```text
+Remote OK / Хабр Карьера → Collector → NATS JetStream → Processor → PostgreSQL
+                             ↕                                         ↑
+                           Redis                               API ← React
 ```
 
-### 2. Настройка переменных окружения
+- **Collector** запускает единый сценарий сбора для всех фидов. Адаптеры источников, Redis и очереди реализуют его интерфейсы. После подтверждения публикации в JetStream ключ вакансии попадает в Redis на 24 часа.
+- **Processor** загружает словарь при старте и извлекает навыки из заголовка и описания. PostgreSQL сохраняет вакансию и связи в одной транзакции. Уникальность пары источника и внешнего ID позволяет повторить доставку при сбое. После успешной записи обработчик подтверждает сообщение.
+- **API** принимает HTTP-запросы в `services/api/internal/handler`. Модели чтения и контракт находятся в `internal/market`, реализация запросов — в `internal/postgres`. Обзор и страницы каталога читаются в согласованном снимке базы.
+- **React** получает данные по HTTP с того же origin. `frontend/src/api.js` отвечает за запросы и отмену при смене страницы. Компоненты разделов используют общие представления списков, рейтингов, ошибок и загрузки.
 
-```bash
-cp .env.example .env
+## Запуск
+
+Нужны Go 1.26.1+, Node.js 22.12+, pnpm 11 и Docker Compose. Команды для PowerShell выполняются из корня репозитория.
+
+```powershell
+Copy-Item .env.example .env
+docker compose -f infra/docker-compose.yml up -d --wait
 ```
 
-Открой `.env` и заполни:
+На новой базе примените миграции по порядку. Если база уже существует, выполните только ещё не применённые файлы. Миграция 006 добавляет источник Хабр Карьеры.
 
-```env
-DATABASE_URL=postgres://app@127.0.0.1:5433/jobmarket?sslmode=disable
-REDIS_URL=redis://localhost:6379/0
-NATS_URL=nats://localhost:4222
-API_PORT=8080
+```powershell
+Get-ChildItem infra/migrations/*.up.sql | Sort-Object Name | ForEach-Object {
+  Get-Content -Raw $_.FullName | docker exec -i jobmarket_pg psql -v ON_ERROR_STOP=1 -U app -d jobmarket
+  if ($LASTEXITCODE) { throw "Migration failed: $($_.Name)" }
+}
 ```
 
-### 3. Настройка инфраструктуры
+Запустите сервисы в отдельных терминалах. Сборщик выполняет один проход, API и обработчик остаются запущенными. При переходе со старой версии перезапустите оба сервиса очереди до следующего сбора.
 
-```bash
-cd infra
-docker compose up -d
+```powershell
+go run ./services/processor/cmd
+go run ./services/collector/cmd
+go run ./services/api/cmd
 ```
 
-### 4. Применение миграций
-
-```bash
-# Из папки infra
-Get-Content ./migrations/001_sources.up.sql | docker exec -i jobmarket_pg psql -U app -d jobmarket
-Get-Content ./migrations/002_companies.up.sql | docker exec -i jobmarket_pg psql -U app -d jobmarket
-Get-Content ./migrations/003_create_skills.up.sql | docker exec -i jobmarket_pg psql -U app -d jobmarket
-Get-Content ./migrations/004_create_vacancies.up.sql | docker exec -i jobmarket_pg psql -U app -d jobmarket
-Get-Content ./migrations/005_create_vacancy_skills.up.sql | docker exec -i jobmarket_pg psql -U app -d jobmarket
+```powershell
+pnpm --dir frontend install --frozen-lockfile
+pnpm --dir frontend dev
 ```
 
-### 5. Запуск сервисов
+Откройте [дашборд](http://localhost:5173). Vite передаёт запросы `/api` на `http://127.0.0.1:8080`. Для другого адреса задайте `API_TARGET` перед запуском Vite. Для размещения соберите `frontend/dist`, раздайте каталог статическим сервером и проксируйте путь `/api/` на Go-сервис.
 
-Открой три терминала:
+## API
 
-```bash
-# Терминал 1 — Processor
-go run ./services/processor/cmd/main.go
+| GET /api/v1 | Данные |
+|---|---|
+| `/analytics/overview` | Общие показатели, источники и ежедневные публикации за 30 календарных дней. По умолчанию период заканчивается сегодня. Дашборд передаёт `period=latest`, чтобы показать данные по дату последней публикации |
+| `/analytics/skills` | До 20 навыков и количество вакансий с каждым из них |
+| `/analytics/companies` | До 10 работодателей по числу вакансий |
+| `/analytics/salary` | Покрытие зарплатами и исторические средние границы без конвертации валют |
+| `/vacancies` | Каталог и общее количество совпадений. Параметры `page`, `limit` (1–100), `q`, `location`, `remote`, `source` |
+| `/vacancies/:id` | Подробности вакансии |
+| `/vacancies/search?q=golang` | Полнотекстовый поиск по заголовку и описанию |
 
-# Терминал 2 — Collector
-go run ./services/collector/cmd/main.go
+Доли рынка рассчитываются по собранным вакансиям. Источник hh.ru имеет отдельный адаптер и по умолчанию в сборе не участвует.
 
-# Терминал 3 — API
-go run ./services/api/cmd/main.go
+## Проверки
+
+```powershell
+go test ./...
+go vet ./...
+pnpm --dir frontend build
 ```
 
-### 6. Запуск дашборда
+Для интеграционного теста атомарной записи задайте `TEST_DATABASE_URL` с адресом тестового PostgreSQL и выполните `go test -count=1 ./pkg/storage`. Тест использует временные таблицы своего соединения.
 
-```bash
-cd analytics
-py -3.12 -m streamlit run dashboard.py
-```
-
----
-
-## 🔌 API эндпоинты
-
-| Метод | Путь | Описание |
-|-------|------|----------|
-| GET | `/api/v1/vacancies` | Список вакансий с пагинацией |
-| GET | `/api/v1/vacancies/:id` | Детали вакансии |
-| GET | `/api/v1/vacancies/search?q=golang` | Полнотекстовый поиск |
-| GET | `/api/v1/analytics/skills` | Топ навыков |
-| GET | `/api/v1/analytics/salary` | Статистика зарплат |
-
----
-
-## 🛠️ Технологии
-
-| Слой | Технологии |
-|------|-----------|
-| Backend | Go, Gin, pgx/v5 |
-| Очередь | NATS JetStream |
-| Кэш | Redis |
-| База данных | PostgreSQL 16 |
-| Визуализация | Python, Streamlit, Plotly |
-| Инфраструктура | Docker Compose |
-
----
-
-## 📦 Источники вакансий
-
-| Источник | Тип | Статус |
-|----------|-----|--------|
-| RemoteOK | JSON API | ✅ Активен |
-| Habr Career | RSS | ✅ Активен |
-| HH.ru | OAuth 2.0 API | 🔧 В разработке |
-
----
-
-## 📈 Дашборд
-
-- **Обзор** — метрики, динамика публикаций, источники
-- **Навыки** — топ технологий, карта, категории
-- **Компании** — рейтинг работодателей
-- **Вакансии** — полный список с поиском и фильтрами
-
-**Таблицы:** `sources`, `companies`, `vacancies`, `skills`, `vacancy_skills`
-
----
-
-## 👤 Автор
-
-**Egor Malay** — [@malayegor9-dotcom](https://github.com/malayegor9-dotcom)
+Сквозной тест `TestCollectorToProcessor` использует отдельные тестовые сервисы и оставляет контрольную вакансию в тестовой базе. Примените миграции, запустите Processor с адресами тестовых PostgreSQL и NATS, затем задайте `TEST_DATABASE_URL`, `TEST_NATS_URL` и `TEST_REDIS_URL` и выполните `go test -count=1 ./services/collector/internal/collect`.
