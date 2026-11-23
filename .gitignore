@@ -1,3 +1,8 @@
 .env
 bin/
 *.exe
+frontend/node_modules/
+frontend/dist/
+.qa/
+.taste-skill/
+shots/
