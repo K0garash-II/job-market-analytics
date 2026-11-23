@@ -31,6 +31,13 @@ type SearchResult struct {
 	Company  string  `json:"company"`
 	Rank     float64 `json:"rank"`
 }
+type Listing struct {
+	Data  []Vacancy `json:"data"`
+	Total int       `json:"total"`
+	Page  int       `json:"page"`
+	Limit int       `json:"limit"`
+}
+
 type Filter struct {
 	Query, Location, Source string
 	Remote                  *bool
@@ -60,7 +67,7 @@ type Salary struct {
 	AvgMax     float64 `json:"avg_salary_max"`
 }
 type Reader interface {
-	Vacancies(context.Context, Filter) ([]Vacancy, error)
+	Vacancies(context.Context, Filter) (Listing, error)
 	Vacancy(context.Context, int) (Vacancy, error)
 	Search(context.Context, string) ([]SearchResult, error)
 	Skills(context.Context) ([]Skill, error)

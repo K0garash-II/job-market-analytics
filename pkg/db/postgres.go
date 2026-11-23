@@ -23,6 +23,7 @@ func NewPostgresPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	}
 
 	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("postgres ping: %w", err)
 	}
 

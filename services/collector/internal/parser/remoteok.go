@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -44,26 +43,14 @@ func (p *RemoteOKParser) Fetch(ctx context.Context, page int) ([]models.RawVacan
 		return []models.RawVacancy{}, nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://remoteok.com/api", nil)
+	body, err := fetchFeed(ctx, p.client, "https://remoteok.com/api", map[string]string{"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json"})
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected status: %d, body: %s", resp.StatusCode, string(body))
-	}
+	defer body.Close()
 
 	var raw []json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := json.NewDecoder(body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 

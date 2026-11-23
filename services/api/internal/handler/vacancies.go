@@ -24,7 +24,7 @@ func (h *Handler) ListVacancies(c *gin.Context) {
 		f.Remote = &v
 	}
 	data, err := h.market.Vacancies(c.Request.Context(), f)
-	respond(c, gin.H{"data": data, "page": page, "limit": limit}, err)
+	respond(c, data, err)
 }
 func (h *Handler) GetVacancy(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))

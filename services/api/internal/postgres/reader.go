@@ -24,9 +24,25 @@ func many[T any](ctx context.Context, db querier, query string, args ...any) ([]
 const fields = `v.id,v.title,coalesce(v.location,''),v.salary_min,v.salary_max,coalesce(v.currency,''),coalesce(v.remote,false),coalesce(v.url,''),v.published_at,coalesce(c.name,''),coalesce(s.name,'')`
 const joins = ` FROM vacancies v LEFT JOIN companies c ON c.id=v.company_id LEFT JOIN sources s ON s.id=v.source_id `
 
-func (r Reader) Vacancies(ctx context.Context, f market.Filter) ([]market.Vacancy, error) {
-	return many[market.Vacancy](ctx, r.Pool, "SELECT "+fields+", ''"+joins+` WHERE ($1='' OR v.location ILIKE '%'||$1||'%') AND ($2::boolean IS NULL OR v.remote=$2) AND ($3='' OR s.name=$3) AND ($4='' OR v.title ILIKE '%'||$4||'%' OR c.name ILIKE '%'||$4||'%') ORDER BY v.published_at DESC NULLS LAST,v.id DESC LIMIT $5 OFFSET $6`, f.Location, f.Remote, f.Source, f.Query, f.Limit, int64(f.Page-1)*int64(f.Limit))
+func (r Reader) Vacancies(ctx context.Context, f market.Filter) (market.Listing, error) {
+	const where = ` WHERE ($1='' OR v.location ILIKE '%'||$1||'%')
+   AND ($2::boolean IS NULL OR v.remote=$2)
+   AND ($3='' OR s.name=$3)
+   AND ($4='' OR v.title ILIKE '%'||$4||'%' OR c.name ILIKE '%'||$4||'%')`
+	result := market.Listing{Page: f.Page, Limit: f.Limit}
+	args := []any{f.Location, f.Remote, f.Source, f.Query}
+	err := pgx.BeginTxFunc(ctx, r.Pool, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, "SELECT count(*)"+joins+where, args...).Scan(&result.Total); err != nil {
+			return err
+		}
+		query := "SELECT " + fields + ", ''" + joins + where + " ORDER BY v.published_at DESC NULLS LAST, v.id DESC LIMIT $5 OFFSET $6"
+		var err error
+		result.Data, err = many[market.Vacancy](ctx, tx, query, append(args, f.Limit, int64(f.Page-1)*int64(f.Limit))...)
+		return err
+	})
+	return result, err
 }
+
 func (r Reader) Vacancy(ctx context.Context, id int) (market.Vacancy, error) {
 	rows, err := r.Pool.Query(ctx, "SELECT "+fields+", coalesce(v.description,'')"+joins+"WHERE v.id=$1", id)
 	if err != nil {

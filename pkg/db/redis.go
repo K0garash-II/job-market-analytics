@@ -17,6 +17,7 @@ func NewRedisClient(ctx context.Context, addr string) (*redis.Client, error) {
 	client := redis.NewClient(opt)
 
 	if err := client.Ping(ctx).Err(); err != nil {
+		client.Close()
 		return nil, fmt.Errorf("redis ping: %w", err)
 	}
 

@@ -55,24 +55,14 @@ func (p *HabrParser) Fetch(ctx context.Context, page int) ([]models.RawVacancy, 
 	}
 	url := feeds[page]
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	body, err := fetchFeed(ctx, p.client, url, map[string]string{"User-Agent": "JobMarketAnalytics/1.0 (malayegor9@gmail.com)"})
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("User-Agent", "JobMarketAnalytics/1.0 (malayegor9@gmail.com)")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
-	}
+	defer body.Close()
 
 	var rss habrRSS
-	if err := xml.NewDecoder(resp.Body).Decode(&rss); err != nil {
+	if err := xml.NewDecoder(body).Decode(&rss); err != nil {
 		return nil, fmt.Errorf("decode rss: %w", err)
 	}
 

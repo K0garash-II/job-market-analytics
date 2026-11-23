@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -66,28 +65,14 @@ func (p *HHParser) Fetch(ctx context.Context, page int) ([]models.RawVacancy, er
 		page,
 	)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	body, err := fetchFeed(ctx, p.client, url, map[string]string{"Authorization": "Bearer " + p.accessToken, "HH-User-Agent": "JobMarketAnalytics/1.0 (malayegor9@gmail.com)", "Accept": "application/json"})
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, err
 	}
-
-	req.Header.Set("Authorization", "Bearer "+p.accessToken)
-	req.Header.Set("HH-User-Agent", "JobMarketAnalytics/1.0 (malayegor9@gmail.com)")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected status: %d, body: %s", resp.StatusCode, string(body))
-	}
+	defer body.Close()
 
 	var result hhResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 

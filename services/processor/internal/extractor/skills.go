@@ -1,21 +1,34 @@
 package extractor
 
 import (
+	"regexp"
 	"strings"
-	"unicode"
 )
 
-type SkillExtractor struct{ index map[string]int }
+type term struct {
+	id      int
+	pattern *regexp.Regexp
+}
+type SkillExtractor struct{ terms []term }
 
-func New(index map[string]int) *SkillExtractor { return &SkillExtractor{index} }
+func New(index map[string]int) *SkillExtractor {
+	e := &SkillExtractor{}
+	for name, id := range index {
+		if name == "" {
+			continue
+		}
+		pattern := `(^|[^\pL\pN])` + regexp.QuoteMeta(strings.ToLower(name)) + `($|[^\pL\pN])`
+		e.terms = append(e.terms, term{id, regexp.MustCompile(pattern)})
+	}
+	return e
+}
+
 func (e *SkillExtractor) Extract(title, description string) []int {
-	words := strings.FieldsFunc(strings.ToLower(title+" "+description), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '+' && r != '#' })
-	seen := map[int]bool{}
+	text := strings.ToLower(title + " " + description)
 	var ids []int
-	for _, word := range words {
-		if id, ok := e.index[word]; ok && !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
+	for _, term := range e.terms {
+		if term.pattern.MatchString(text) {
+			ids = append(ids, term.id)
 		}
 	}
 	return ids
