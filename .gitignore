@@ -3,6 +3,12 @@ bin/
 *.exe
 frontend/node_modules/
 frontend/dist/
+
+# Local design context and review artifacts
+.impeccable/
+/DESIGN.md
+/PRODUCT.md
 .qa/
 .taste-skill/
 shots/
+reports/
