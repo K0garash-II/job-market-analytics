@@ -1,50 +1,23 @@
 package dedup
 
-//дедупликация вакансий через Redis
 import (
 	"context"
 	"crypto/sha256"
 	"fmt"
-	"time"
-
 	"github.com/redis/go-redis/v9"
+	"time"
 )
 
-type Deduplicator struct {
-	rdb *redis.Client
-	ttl time.Duration // как долго помним что вакансия уже обработана
+type Deduplicator struct{ client *redis.Client }
+
+func New(client *redis.Client) *Deduplicator { return &Deduplicator{client} }
+func fingerprint(source, id string) string {
+	return fmt.Sprintf("dedup:%x", sha256.Sum256([]byte(source+":"+id)))
 }
-
-func New(rdb *redis.Client) *Deduplicator {
-	return &Deduplicator{
-		rdb: rdb,
-		ttl: 24 * time.Hour, // помним 24 часа
-	}
+func (d *Deduplicator) Seen(ctx context.Context, source, id string) (bool, error) {
+	n, err := d.client.Exists(ctx, fingerprint(source, id)).Result()
+	return n > 0, err
 }
-
-// fingerprint создаёт уникальный ключ для вакансии
-// используем source + external_id — этого достаточно для уникальности
-func fingerprint(source, externalID string) string {
-	h := sha256.Sum256([]byte(source + ":" + externalID))
-	return fmt.Sprintf("dedup:%x", h)
-}
-
-// IsDuplicate возвращает true если вакансия уже обрабатывалась
-// Принцип: пробуем записать ключ в Redis через SetNX (set if not exists)
-// Если ключ уже был — значит дубль
-func (d *Deduplicator) IsDuplicate(ctx context.Context, source, externalID string) (bool, error) {
-	key := fingerprint(source, externalID)
-
-	// SetNX возвращает true если ключ был СОЗДАН (то есть его не было)
-	created, err := d.rdb.SetNX(ctx, key, 1, d.ttl).Result()
-	if err != nil {
-		return false, fmt.Errorf("redis setnx: %w", err)
-	}
-
-	return !created, nil
-}
-
-func (d *Deduplicator) Reset(ctx context.Context, source, externalID string) error {
-	key := fingerprint(source, externalID)
-	return d.rdb.Del(ctx, key).Err()
+func (d *Deduplicator) Mark(ctx context.Context, source, id string) error {
+	return d.client.Set(ctx, fingerprint(source, id), 1, 24*time.Hour).Err()
 }

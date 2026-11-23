@@ -1,106 +1,52 @@
 package main
 
-//точка входа collector'а: инициализирует зависимости, запускает парсинг
 import (
 	"context"
-	"log"
-	"os"
-
+	"errors"
+	"fmt"
 	"github.com/joho/godotenv"
 	"github.com/malayegor9-dotcom/job-market-analytics/pkg/db"
+	"github.com/malayegor9-dotcom/job-market-analytics/services/collector/internal/collect"
 	"github.com/malayegor9-dotcom/job-market-analytics/services/collector/internal/dedup"
 	"github.com/malayegor9-dotcom/job-market-analytics/services/collector/internal/parser"
 	"github.com/malayegor9-dotcom/job-market-analytics/services/collector/internal/queue"
+	"log"
+	"os"
 )
 
+func run(ctx context.Context) error {
+	client, err := db.NewRedisClient(ctx, os.Getenv("REDIS_URL"))
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	nc, err := db.NewNATSConn(os.Getenv("NATS_URL"))
+	if err != nil {
+		return err
+	}
+	defer nc.Close()
+	js, _, err := db.VacancyStream(ctx, nc)
+	if err != nil {
+		return err
+	}
+	history := dedup.New(client)
+	publisher := queue.Publisher{JS: js}
+	var failures []error
+	for _, feed := range []struct {
+		source parser.Parser
+		pages  int
+	}{{parser.NewRemoteOKParser(), 1}, {parser.NewHabrParser(), 3}} {
+		for page := 0; page < feed.pages; page++ {
+			if err := collect.Page(ctx, feed.source, page, history, publisher); err != nil {
+				failures = append(failures, fmt.Errorf("%s page %d: %w", feed.source.Source(), page, err))
+			}
+		}
+	}
+	return errors.Join(failures...)
+}
 func main() {
-	if err := godotenv.Load(".env"); err != nil {
-		log.Println("no .env file, reading from environment")
-	}
-
-	ctx := context.Background()
-
-	pgPool, err := db.NewPostgresPool(ctx, os.Getenv("DATABASE_URL"))
-	if err != nil {
-		log.Fatalf("postgres: %v", err)
-	}
-	defer pgPool.Close()
-	log.Println("✓ PostgreSQL connected")
-
-	redisClient, err := db.NewRedisClient(ctx, os.Getenv("REDIS_URL"))
-	if err != nil {
-		log.Fatalf("redis: %v", err)
-	}
-	defer redisClient.Close()
-	log.Println("✓ Redis connected")
-
-	natsConn, err := db.NewNATSConn(os.Getenv("NATS_URL"))
-	if err != nil {
-		log.Fatalf("nats: %v", err)
-	}
-	defer natsConn.Close()
-	log.Println("✓ NATS connected")
-
-	deduplicator := dedup.New(redisClient)
-	publisher := queue.NewPublisher(natsConn)
-	remoteok := parser.NewRemoteOKParser()
-
-	log.Println("Fetching vacancies from RemoteOK...")
-	vacancies, err := remoteok.Fetch(ctx, 0)
-	if err != nil {
-		log.Fatalf("fetch: %v", err)
-	}
-	log.Printf("Fetched %d vacancies", len(vacancies))
-
-	published := 0
-	skipped := 0
-	for _, v := range vacancies {
-		// Проверяем дубль через Redis
-		isDup, err := deduplicator.IsDuplicate(ctx, v.Source, v.ExternalID)
-		if err != nil {
-			log.Printf("dedup check %s: %v", v.ExternalID, err)
-			continue
-		}
-		if isDup {
-			skipped++
-			continue
-		}
-
-		// Отправляем в NATS
-		if err := publisher.Publish(ctx, v); err != nil {
-			log.Printf("publish %s: %v", v.ExternalID, err)
-			continue
-		}
-		published++
-	}
-
-	log.Printf("Published: %d, Skipped (dedup): %d", published, skipped)
-	_ = pgPool
-
-	// Habr Career
-	log.Println("Fetching vacancies from Habr Career...")
-	habr := parser.NewHabrParser()
-
-	// Собираем по трём фидам (go, python, java)
-	for feedPage := 0; feedPage < 3; feedPage++ {
-		habrVacs, err := habr.Fetch(ctx, feedPage)
-		if err != nil {
-			log.Printf("habr fetch page %d error: %v", feedPage, err)
-			continue
-		}
-
-		for _, v := range habrVacs {
-			isDup, err := deduplicator.IsDuplicate(ctx, v.Source, v.ExternalID)
-			if err != nil || isDup {
-				skipped++
-				continue
-			}
-			if err := publisher.Publish(ctx, v); err != nil {
-				log.Printf("publish habr %s: %v", v.ExternalID, err)
-				continue
-			}
-			published++
-		}
-		log.Printf("Habr feed %d: fetched %d vacancies", feedPage, len(habrVacs))
+	_ = godotenv.Load()
+	if err := run(context.Background()); err != nil {
+		log.Fatal(err)
 	}
 }
