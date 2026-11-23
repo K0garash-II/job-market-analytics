@@ -1,30 +1,32 @@
 # Job Market Analytics
 
-Аналитика IT-вакансий из Remote OK и Хабр Карьеры. React-интерфейс показывает динамику публикаций за 7 и 30 дней, распределение по источникам и формату работы, востребованные навыки и рейтинг работодателей. В каталоге доступны поиск по названию или компании, фильтры и переход к исходной публикации.
+**English** · [Русский](README.ru.md)
 
-## Архитектура
+Explore IT vacancies from Remote OK and Habr Career. The React dashboard tracks postings over 7 or 30 days, breaks them down by source and work arrangement, and ranks skills and employers. Search the catalog by job title or company, apply filters, and open the original posting.
+
+## Architecture
 
 ```text
-Remote OK / Хабр Карьера → Collector → NATS JetStream → Processor → PostgreSQL
+Remote OK / Habr Career → Collector → NATS JetStream → Processor → PostgreSQL
                              ↕                                         ↑
-                           Redis                               API ← React
+                           Redis                                  API ← React
 ```
 
-- **Collector** запускает единый сценарий сбора для всех фидов. Адаптеры источников, Redis и очереди реализуют его интерфейсы. После подтверждения публикации в JetStream ключ вакансии попадает в Redis на 24 часа.
-- **Processor** загружает словарь при старте и извлекает навыки из заголовка и описания. PostgreSQL сохраняет вакансию и связи в одной транзакции. Уникальность пары источника и внешнего ID позволяет повторить доставку при сбое. После успешной записи обработчик подтверждает сообщение.
-- **API** принимает HTTP-запросы в `services/api/internal/handler`. Модели чтения и контракт находятся в `internal/market`, реализация запросов — в `internal/postgres`. Обзор и страницы каталога читаются в согласованном снимке базы.
-- **React** получает данные по HTTP с того же origin. `frontend/src/api.js` отвечает за запросы и отмену при смене страницы. Компоненты разделов используют общие представления списков, рейтингов, ошибок и загрузки.
+- **Collector** runs the same ingestion workflow for each feed. Source, Redis, and queue adapters implement its interfaces. Once JetStream confirms publication, the collector caches the vacancy key in Redis for 24 hours.
+- **Processor** loads a skill dictionary at startup and extracts skills from each job title and description. It saves the vacancy and its skill associations in one PostgreSQL transaction, then acknowledges the message. A unique constraint on the source and external ID prevents duplicates on redelivery.
+- **API** handles HTTP requests in `services/api/internal/handler`. Within the API service, `internal/market` defines the read models and repository interface, and `internal/postgres` implements the queries. Each overview or catalog request reads from a consistent database snapshot.
+- **React** fetches data from the same origin. `frontend/src/api.js` handles requests and cancels them when users navigate away. The dashboard sections share list, ranking, loading, and error components.
 
-## Запуск
+## Run locally
 
-Нужны Go 1.26.1+, Node.js 22.12+, pnpm 11 и Docker Compose. Команды для PowerShell выполняются из корня репозитория.
+Install Go 1.26.1+, Node.js 22.12+, pnpm 11, and Docker Compose. Run the following PowerShell commands from the repository root.
 
 ```powershell
 Copy-Item .env.example .env
 docker compose -f infra/docker-compose.yml up -d --wait
 ```
 
-На новой базе примените миграции по порядку. Если база уже существует, выполните только ещё не применённые файлы. Миграция 006 добавляет источник Хабр Карьеры, 007 — политику хранения вакансий.
+For a new database, apply all migrations in order. For an existing database, run only the migrations that have not yet been applied. Migration 006 adds Habr Career as a source. Migration 007 adds the vacancy retention policy.
 
 ```powershell
 Get-ChildItem infra/migrations/*.up.sql | Sort-Object Name | ForEach-Object {
@@ -33,9 +35,7 @@ Get-ChildItem infra/migrations/*.up.sql | Sort-Object Name | ForEach-Object {
 }
 ```
 
-Запустите сервисы в отдельных терминалах. Сборщик выполняет один проход, API и обработчик остаются запущенными. При переходе со старой версии перезапустите оба сервиса очереди до следующего сбора.
-
-Сервис Compose `retention` проверяет базу при запуске и затем каждую минуту. Когда с момента публикации проходит больше 720 часов, он удаляет вакансию вместе с её связями с навыками. PostgreSQL пропускает повторный импорт просроченной записи. Записи без известной даты публикации сохраняются. После обновления существующей установки примените миграцию 007 и запустите `docker compose -f infra/docker-compose.yml up -d --no-deps retention`.
+Run each Go service in a separate terminal. The collector performs one pass and exits. The processor and API keep running. When upgrading from an older version, restart the processor and use the updated collector for the next run.
 
 ```powershell
 go run ./services/processor/cmd
@@ -43,28 +43,32 @@ go run ./services/collector/cmd
 go run ./services/api/cmd
 ```
 
+The Compose `retention` service checks the database at startup and every minute thereafter. It deletes vacancies older than 720 hours from publication, along with their skill associations. PostgreSQL skips expired postings on reimport and retains postings whose publication date is unknown. To enable retention on an existing installation, apply migration 007 and run `docker compose -f infra/docker-compose.yml up -d --no-deps retention`.
+
+Start the frontend in another terminal.
+
 ```powershell
 pnpm --dir frontend install --frozen-lockfile
 pnpm --dir frontend dev
 ```
 
-Откройте [дашборд](http://localhost:5173). Vite передаёт запросы `/api` на `http://127.0.0.1:8080`. Для другого адреса задайте `API_TARGET` перед запуском Vite. Для размещения соберите `frontend/dist`, раздайте каталог статическим сервером и проксируйте путь `/api/` на Go-сервис.
+Open the [dashboard](http://localhost:5173). Vite proxies `/api` requests to `http://127.0.0.1:8080`. Set `API_TARGET` before starting Vite to use a different backend. For deployment, build the frontend, serve `frontend/dist` with a static web server, and proxy `/api/` to the Go API.
 
 ## API
 
-| GET /api/v1 | Данные |
+| GET /api/v1 | Response |
 |---|---|
-| `/analytics/overview` | Общие показатели, источники и ежедневные публикации за 30 календарных дней. По умолчанию период заканчивается сегодня. Дашборд передаёт `period=latest`, чтобы показать данные по дату последней публикации |
-| `/analytics/skills` | До 20 навыков и количество вакансий с каждым из них |
-| `/analytics/companies` | До 10 работодателей по числу вакансий |
-| `/analytics/salary` | Покрытие зарплатами и исторические средние границы без конвертации валют |
-| `/vacancies` | Каталог и общее количество совпадений. Параметры `page`, `limit` (1–100), `q`, `location`, `remote`, `source` |
-| `/vacancies/:id` | Подробности вакансии |
-| `/vacancies/search?q=golang` | Полнотекстовый поиск по заголовку и описанию |
+| `/analytics/overview` | Summary metrics, source counts, and daily postings over 30 calendar days. The window ends today by default. The dashboard passes `period=latest` to end the window on the most recent publication date. |
+| `/analytics/skills` | Up to 20 skills and the number of vacancies mentioning each one. |
+| `/analytics/companies` | Up to 10 employers ranked by vacancy count. |
+| `/analytics/salary` | Salary coverage and average lower and upper salary bounds across stored postings, without currency conversion. |
+| `/vacancies` | Paginated vacancies and the total number of matches. Accepts `page`, `limit` (1–100), `q`, `location`, `remote`, and `source`. |
+| `/vacancies/:id` | Details for one vacancy. |
+| `/vacancies/search?q=golang` | Full-text search across job titles and descriptions. |
 
-Доли рынка рассчитываются по собранным вакансиям. Источник hh.ru имеет отдельный адаптер и по умолчанию в сборе не участвует.
+Market shares are calculated from collected vacancies. The repository includes an hh.ru adapter, which is disabled by default.
 
-## Проверки
+## Checks
 
 ```powershell
 go test ./...
@@ -72,6 +76,6 @@ go vet ./...
 pnpm --dir frontend build
 ```
 
-Для интеграционного теста атомарной записи задайте `TEST_DATABASE_URL` с адресом тестового PostgreSQL и выполните `go test -count=1 ./pkg/storage`. Тест использует временные таблицы своего соединения.
+To test atomic writes, set `TEST_DATABASE_URL` to a test PostgreSQL database and run `go test -count=1 ./pkg/storage`. The test uses temporary tables scoped to its connection.
 
-Сквозной тест `TestCollectorToProcessor` использует отдельные тестовые сервисы и оставляет контрольную вакансию в тестовой базе. Примените миграции, запустите Processor с адресами тестовых PostgreSQL и NATS, затем задайте `TEST_DATABASE_URL`, `TEST_NATS_URL` и `TEST_REDIS_URL` и выполните `go test -count=1 ./services/collector/internal/collect`.
+The end-to-end test `TestCollectorToProcessor` uses dedicated test services and leaves a test vacancy in the test database. Apply the migrations, start the processor against the test PostgreSQL and NATS instances, then set `TEST_DATABASE_URL`, `TEST_NATS_URL`, and `TEST_REDIS_URL` and run `go test -count=1 ./services/collector/internal/collect`.
